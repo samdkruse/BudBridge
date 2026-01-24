@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleRate, StreamConfig};
+use cpal::{Device, StreamConfig};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,8 +8,6 @@ use std::sync::Arc;
 use std::thread;
 use std::io::{self, Write};
 
-const SAMPLE_RATE: u32 = 48000;
-const CHANNELS: u16 = 1;
 const RECEIVE_PORT: u16 = 4810; // Receive mic audio from iPhone
 const SEND_PORT: u16 = 4811;    // Send PC audio to iPhone
 
@@ -144,18 +142,26 @@ fn run_audio(
     println!("\nTip: Set Windows default input to 'Stereo Mix' or loopback device");
     println!("     to capture system audio (what you hear).\n");
 
-    // Configure streams
-    let config = StreamConfig {
-        channels: CHANNELS,
-        sample_rate: SampleRate(SAMPLE_RATE),
-        buffer_size: cpal::BufferSize::Fixed(1024),
-    };
+    // Use device's default configs
+    let input_supported = input_device.default_input_config()?;
+    let output_supported = output_device.default_output_config()?;
+
+    let input_config: StreamConfig = input_supported.clone().into();
+    let output_config: StreamConfig = output_supported.clone().into();
+
+    let input_channels = input_config.channels;
+    let output_channels = output_config.channels;
+    let input_sample_rate = input_config.sample_rate.0;
+    let output_sample_rate = output_config.sample_rate.0;
+
+    println!("Input: {} Hz, {} ch", input_sample_rate, input_channels);
+    println!("Output: {} Hz, {} ch\n", output_sample_rate, output_channels);
 
     // Input stream - capture audio and send to iPhone
-    let input_stream = build_input_stream(&input_device, &config, mic_tx)?;
+    let input_stream = build_input_stream(&input_device, &input_config, mic_tx, input_channels)?;
 
     // Output stream - play iPhone mic audio
-    let output_stream = build_output_stream(&output_device, &config, pc_rx)?;
+    let output_stream = build_output_stream(&output_device, &output_config, pc_rx, output_channels)?;
 
     input_stream.play()?;
     output_stream.play()?;
@@ -176,17 +182,27 @@ fn build_input_stream(
     device: &Device,
     config: &StreamConfig,
     tx: Sender<Vec<i16>>,
+    channels: u16,
 ) -> Result<cpal::Stream> {
     let err_fn = |err| eprintln!("Input stream error: {}", err);
 
     let stream = device.build_input_stream(
         config,
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            // Convert f32 to i16
-            let samples: Vec<i16> = data
-                .iter()
-                .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
-                .collect();
+            // Convert to mono if stereo, then f32 to i16
+            let samples: Vec<i16> = if channels == 2 {
+                // Average stereo channels to mono
+                data.chunks(2)
+                    .map(|chunk| {
+                        let mono = (chunk.get(0).unwrap_or(&0.0) + chunk.get(1).unwrap_or(&0.0)) / 2.0;
+                        (mono.clamp(-1.0, 1.0) * 32767.0) as i16
+                    })
+                    .collect()
+            } else {
+                data.iter()
+                    .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+                    .collect()
+            };
             tx.try_send(samples).ok();
         },
         err_fn,
@@ -200,10 +216,11 @@ fn build_output_stream(
     device: &Device,
     config: &StreamConfig,
     rx: Receiver<Vec<i16>>,
+    channels: u16,
 ) -> Result<cpal::Stream> {
     let err_fn = |err| eprintln!("Output stream error: {}", err);
 
-    // Buffer for smooth playback
+    // Buffer for smooth playback (stores mono samples)
     let buffer: Arc<std::sync::Mutex<Vec<f32>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
     let buffer_clone = buffer.clone();
 
@@ -216,8 +233,8 @@ fn build_output_stream(
                 .collect();
             if let Ok(mut buf) = buffer_clone.lock() {
                 buf.extend(floats);
-                // Limit buffer size to ~200ms
-                let max_samples = (SAMPLE_RATE as usize) / 5;
+                // Limit buffer size to ~200ms worth of mono samples
+                let max_samples = 48000 / 5;
                 let current_len = buf.len();
                 if current_len > max_samples {
                     buf.drain(0..current_len - max_samples);
@@ -230,8 +247,19 @@ fn build_output_stream(
         config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
             if let Ok(mut buf) = buffer.lock() {
-                for sample in data.iter_mut() {
-                    *sample = buf.pop().unwrap_or(0.0);
+                if channels == 2 {
+                    // Duplicate mono to stereo
+                    for chunk in data.chunks_mut(2) {
+                        let sample = if !buf.is_empty() { buf.remove(0) } else { 0.0 };
+                        chunk[0] = sample;
+                        if chunk.len() > 1 {
+                            chunk[1] = sample;
+                        }
+                    }
+                } else {
+                    for sample in data.iter_mut() {
+                        *sample = if !buf.is_empty() { buf.remove(0) } else { 0.0 };
+                    }
                 }
             }
         },
