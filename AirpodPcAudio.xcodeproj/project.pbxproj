@@ -14,11 +14,11 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		A1000009238F1234567890AB /* AirpodPcAudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AirpodPcAudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000002238F1234567890AB /* AirpodPcAudioApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirpodPcAudioApp.swift; sourceTree = "<group>"; };
 		A1000004238F1234567890AB /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A1000006238F1234567890AB /* AudioManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioManager.swift; sourceTree = "<group>"; };
 		A1000008238F1234567890AB /* NetworkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkManager.swift; sourceTree = "<group>"; };
+		A1000009238F1234567890AB /* AirpodPcAudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AirpodPcAudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A100000A238F1234567890AB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -265,11 +265,12 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5H25X5G9V9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AirpodPcAudio/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "AirPod PC Audio";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app needs local network access to stream audio between your iPhone and PC.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access to capture audio from your AirPods and stream it to your PC.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -296,11 +297,12 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5H25X5G9V9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AirpodPcAudio/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "AirPod PC Audio";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app needs local network access to stream audio between your iPhone and PC.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access to capture audio from your AirPods and stream it to your PC.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -323,15 +325,6 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A1000014238F1234567890AB /* Build configuration list for PBXProject "AirpodPcAudio" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				A1000015238F1234567890AB /* Debug */,
-				A1000016238F1234567890AB /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		A1000010238F1234567890AB /* Build configuration list for PBXNativeTarget "AirpodPcAudio" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -341,8 +334,16 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		A1000014238F1234567890AB /* Build configuration list for PBXProject "AirpodPcAudio" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1000015238F1234567890AB /* Debug */,
+				A1000016238F1234567890AB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = A1000013238F1234567890AB /* Project object */;
 }
