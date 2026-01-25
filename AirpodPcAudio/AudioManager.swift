@@ -4,8 +4,7 @@ import Accelerate
 class AudioManager: ObservableObject {
     private var audioEngine: AVAudioEngine?
     private var inputNode: AVAudioInputNode?
-    private var outputNode: AVAudioOutputNode?
-    private var mixerNode: AVAudioMixerNode?
+    private var playerNode: AVAudioPlayerNode?
 
     @Published var isRunning = false
     @Published var inputLevel: Float = 0
@@ -13,9 +12,13 @@ class AudioManager: ObservableObject {
     // Callback when mic audio is captured (send to network)
     var onAudioCaptured: ((Data) -> Void)?
 
-    // Audio format: 16-bit PCM, 48kHz, mono
-    private let sampleRate: Double = 48000
+    // Audio format: 16-bit PCM, 24kHz, mono
+    private let sampleRate: Double = 24000
     private let channels: AVAudioChannelCount = 1
+
+    private var floatFormat: AVAudioFormat? {
+        AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: channels, interleaved: false)
+    }
 
     private var pcmFormat: AVAudioFormat? {
         AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: sampleRate, channels: channels, interleaved: true)
@@ -63,16 +66,12 @@ class AudioManager: ObservableObject {
         guard let engine = audioEngine else { return }
 
         inputNode = engine.inputNode
-        outputNode = engine.outputNode
 
-        // Create mixer for playback
-        mixerNode = AVAudioMixerNode()
-        guard let mixer = mixerNode else { return }
-        engine.attach(mixer)
-
-        // Connect mixer to output
-        let outputFormat = outputNode!.inputFormat(forBus: 0)
-        engine.connect(mixer, to: outputNode!, format: outputFormat)
+        // Create persistent player node for playback
+        playerNode = AVAudioPlayerNode()
+        guard let player = playerNode, let format = floatFormat else { return }
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: format)
 
         // Tap input for mic capture
         let inputFormat = inputNode!.outputFormat(forBus: 0)
@@ -81,6 +80,7 @@ class AudioManager: ObservableObject {
         }
 
         try engine.start()
+        player.play()
 
         DispatchQueue.main.async {
             self.isRunning = true
@@ -90,9 +90,11 @@ class AudioManager: ObservableObject {
     }
 
     func stop() {
+        playerNode?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()
         audioEngine = nil
+        playerNode = nil
 
         try? AVAudioSession.sharedInstance().setActive(false)
 
@@ -132,49 +134,27 @@ class AudioManager: ObservableObject {
 
     func playAudio(data: Data) {
         guard isRunning,
-              let engine = audioEngine,
-              let mixer = mixerNode,
-              let format = pcmFormat else { return }
+              let player = playerNode,
+              let format = floatFormat else { return }
 
         let frameCount = AVAudioFrameCount(data.count / 2) // 16-bit = 2 bytes per sample
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
-        pcmBuffer.frameLength = frameCount
+        guard frameCount > 0,
+              let floatBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
 
-        // Copy PCM data to buffer
+        floatBuffer.frameLength = frameCount
+
+        // Convert int16 PCM data directly to float buffer
         data.withUnsafeBytes { ptr in
-            if let samples = ptr.bindMemory(to: Int16.self).baseAddress {
+            if let samples = ptr.bindMemory(to: Int16.self).baseAddress,
+               let floatData = floatBuffer.floatChannelData?[0] {
                 for i in 0..<Int(frameCount) {
-                    pcmBuffer.int16ChannelData?[0][i] = samples[i]
+                    floatData[i] = Float(samples[i]) / 32768.0
                 }
             }
         }
 
-        // Convert to float format for mixer
-        guard let floatFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: channels, interleaved: false),
-              let floatBuffer = AVAudioPCMBuffer(pcmFormat: floatFormat, frameCapacity: frameCount) else { return }
-
-        floatBuffer.frameLength = frameCount
-
-        // Convert int16 to float
-        if let intData = pcmBuffer.int16ChannelData?[0],
-           let floatData = floatBuffer.floatChannelData?[0] {
-            for i in 0..<Int(frameCount) {
-                floatData[i] = Float(intData[i]) / 32768.0
-            }
-        }
-
-        // Schedule playback
-        let playerNode = AVAudioPlayerNode()
-        engine.attach(playerNode)
-        engine.connect(playerNode, to: mixer, format: floatFormat)
-
-        playerNode.scheduleBuffer(floatBuffer) {
-            DispatchQueue.main.async {
-                engine.detach(playerNode)
-            }
-        }
-
-        playerNode.play()
+        // Schedule buffer on persistent player node
+        player.scheduleBuffer(floatBuffer, completionHandler: nil)
     }
 
     // MARK: - Interruption Handling

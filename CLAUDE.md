@@ -44,6 +44,17 @@ Open `AirpodPcAudio.xcodeproj` in Xcode on macOS. Build and run on device or sim
 - AVFoundation for audio playback
 - Network framework for connectivity
 
+## Agent Commands
+
+### "windows deploy"
+Build and copy the Windows exe to the Downloads folder for easy access:
+```bash
+cd /home/samdk/code/BudBridge/windows && \
+. "$HOME/.cargo/env" && \
+cargo build --release --target x86_64-pc-windows-gnu && \
+cp target/x86_64-pc-windows-gnu/release/airpod-pc-audio.exe /mnt/c/Users/samdk/Downloads/
+```
+
 ## Project Structure
 
 ```
