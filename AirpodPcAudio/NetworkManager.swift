@@ -72,11 +72,19 @@ class NetworkManager: ObservableObject {
     func sendAudio(_ data: Data) {
         guard isConnected, let connection = connection else { return }
 
-        connection.send(content: data, completion: .contentProcessed { error in
-            if let error = error {
-                print("Send error: \(error)")
-            }
-        })
+        // Chunk data to avoid UDP fragmentation (max ~1400 bytes per packet)
+        let chunkSize = 1400
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + chunkSize, data.count)
+            let chunk = data.subdata(in: offset..<end)
+            connection.send(content: chunk, completion: .contentProcessed { error in
+                if let error = error {
+                    print("Send error: \(error)")
+                }
+            })
+            offset = end
+        }
     }
 
     // MARK: - Receive (PC audio to iPhone)

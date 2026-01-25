@@ -74,7 +74,7 @@ fn run_network(
     let send_socket = UdpSocket::bind("0.0.0.0:0")?;
     println!("Sending PC audio to {}", iphone_addr);
 
-    let mut recv_buf = [0u8; 4096];
+    let mut recv_buf = [0u8; 65536]; // Max UDP payload size
 
     while running.load(Ordering::SeqCst) {
         // Receive mic audio from iPhone
@@ -91,13 +91,16 @@ fn run_network(
             Err(e) => eprintln!("Receive error: {}", e),
         }
 
-        // Send PC audio to iPhone
+        // Send PC audio to iPhone (chunked to avoid UDP fragmentation)
         if let Ok(samples) = mic_rx.try_recv() {
             let bytes: Vec<u8> = samples
                 .iter()
                 .flat_map(|s| s.to_le_bytes())
                 .collect();
-            send_socket.send_to(&bytes, iphone_addr).ok();
+            // Send in chunks of ~1400 bytes (safe for MTU)
+            for chunk in bytes.chunks(1400) {
+                send_socket.send_to(chunk, iphone_addr).ok();
+            }
         }
 
         thread::sleep(std::time::Duration::from_micros(100));
