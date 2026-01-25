@@ -1,0 +1,68 @@
+BudBridge Debug Output Example
+==============================
+
+This shows example debug output from the iOS app when connected to the Windows PC.
+
+Key observations from this session:
+- iOS running at 24kHz, mono
+- Receiving ~100 packets/sec from PC (~48KB/sec)
+- Sending ~40 packets/sec to PC (~48KB/sec)
+- Audio is mostly silence (maxAmp: 1-2) - need actual audio playing on PC
+- Player is running and scheduling buffers correctly
+
+--- Sample Output ---
+
+Listening for PC audio on port 4811
+Listener state: ready
+Audio session configured:
+  Sample rate: 24000.0
+  Input channels: 1
+  Output channels: 1
+  IO buffer duration: 0.02
+🎤 Input format: 24000.0 Hz, 1 ch, 1
+🔊 Output format: 24000.0 Hz, 1 ch
+▶️ Player started, isPlaying: true
+Audio engine started
+Connected to 192.168.1.159:4810
+Audio route changed: AVAudioSessionRouteChangeReason(rawValue: 3)
+🔗 Incoming connection from: 192.168.1.159:53060
+   Connection state: preparing
+   Connection state: ready
+📦 RX: 1 pkts, 480 bytes | Last: 480B (240 samples)
+   Non-zero samples: 11 | Preview: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+📤 TX: 344 pkts, 412800 bytes
+🔊 Playback: 1 buffers, 240 samples | Player playing: true
+   Last buffer: 240 samples, 11 non-zero, maxAmp: 1
+📦 RX: 102 pkts, 48960 bytes | Last: 480B (240 samples)
+   Non-zero samples: 1920 | Preview: 00 00 00 00 00 00 00 00 01 00 01 00 00 00 01 00
+📤 TX: 40 pkts, 48000 bytes
+🔊 Playback: 102 buffers, 24480 samples | Player playing: true
+   Last buffer: 240 samples, 108 non-zero, maxAmp: 2
+📦 RX: 101 pkts, 48480 bytes | Last: 480B (240 samples)
+   Non-zero samples: 1502 | Preview: 00 00 00 00 00 00 FF FF 00 00 FF FF 00 00 00 00
+📤 TX: 44 pkts, 52800 bytes
+🔊 Playback: 101 buffers, 24240 samples | Player playing: true
+   Last buffer: 240 samples, 38 non-zero, maxAmp: 2
+
+--- What to look for ---
+
+1. "Non-zero samples" should be high (thousands) when actual audio is playing
+2. "maxAmp" should be much higher than 1-2 when audio is playing (e.g., 1000+)
+3. "Player playing: true" confirms the audio engine is running
+4. Preview hex should show varied values, not mostly 00 00
+
+--- Troubleshooting ---
+
+If maxAmp is always 1-2:
+- Windows isn't capturing actual audio
+- Make sure Stereo Mix is set as default recording device
+- Play some audio on Windows to test
+
+If Player playing: false:
+- Audio engine stopped (interruption, route change)
+- Check for "Audio engine stopped" in logs
+
+If RX packets are 0:
+- Network issue
+- Check firewall on Windows (UDP ports 4810, 4811)
+- Ensure both devices on same network

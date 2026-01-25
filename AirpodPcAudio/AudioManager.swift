@@ -16,6 +16,13 @@ class AudioManager: ObservableObject {
     private let sampleRate: Double = 24000
     private let channels: AVAudioChannelCount = 1
 
+    // Debug stats
+    private var playbackBufferCount = 0
+    private var playbackSampleCount = 0
+    private var captureBufferCount = 0
+    private var captureSampleCount = 0
+    private var lastAudioStatsTime = Date()
+
     private var floatFormat: AVAudioFormat? {
         AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: channels, interleaved: false)
     }
@@ -75,12 +82,16 @@ class AudioManager: ObservableObject {
 
         // Tap input for mic capture
         let inputFormat = inputNode!.outputFormat(forBus: 0)
+        print("🎤 Input format: \(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) ch, \(inputFormat.commonFormat.rawValue)")
+        print("🔊 Output format: \(format.sampleRate) Hz, \(format.channelCount) ch")
+
         inputNode!.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, time in
             self?.processMicInput(buffer: buffer)
         }
 
         try engine.start()
         player.play()
+        print("▶️ Player started, isPlaying: \(player.isPlaying)")
 
         DispatchQueue.main.async {
             self.isRunning = true
@@ -127,6 +138,9 @@ class AudioManager: ObservableObject {
             pcmData.append(Data(bytes: &intSample, count: 2))
         }
 
+        captureBufferCount += 1
+        captureSampleCount += frameCount
+
         onAudioCaptured?(pcmData)
     }
 
@@ -135,7 +149,12 @@ class AudioManager: ObservableObject {
     func playAudio(data: Data) {
         guard isRunning,
               let player = playerNode,
-              let format = floatFormat else { return }
+              let format = floatFormat else {
+            if !isRunning {
+                print("🔇 playAudio called but engine not running")
+            }
+            return
+        }
 
         let frameCount = AVAudioFrameCount(data.count / 2) // 16-bit = 2 bytes per sample
         guard frameCount > 0,
@@ -143,14 +162,34 @@ class AudioManager: ObservableObject {
 
         floatBuffer.frameLength = frameCount
 
-        // Convert int16 PCM data directly to float buffer
+        // Count non-zero samples and find max amplitude
+        var maxAmp: Int16 = 0
+        var nonZero = 0
         data.withUnsafeBytes { ptr in
             if let samples = ptr.bindMemory(to: Int16.self).baseAddress,
                let floatData = floatBuffer.floatChannelData?[0] {
                 for i in 0..<Int(frameCount) {
-                    floatData[i] = Float(samples[i]) / 32768.0
+                    let sample = samples[i]
+                    floatData[i] = Float(sample) / 32768.0
+                    if sample != 0 {
+                        nonZero += 1
+                        if abs(sample) > abs(maxAmp) { maxAmp = sample }
+                    }
                 }
             }
+        }
+
+        playbackBufferCount += 1
+        playbackSampleCount += Int(frameCount)
+
+        // Log playback stats every second
+        let now = Date()
+        if now.timeIntervalSince(lastAudioStatsTime) >= 1.0 {
+            print("🔊 Playback: \(playbackBufferCount) buffers, \(playbackSampleCount) samples | Player playing: \(player.isPlaying)")
+            print("   Last buffer: \(frameCount) samples, \(nonZero) non-zero, maxAmp: \(maxAmp)")
+            playbackBufferCount = 0
+            playbackSampleCount = 0
+            lastAudioStatsTime = now
         }
 
         // Schedule buffer on persistent player node
