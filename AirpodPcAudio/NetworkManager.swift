@@ -4,6 +4,7 @@ import Network
 class NetworkManager: ObservableObject {
     private var connection: NWConnection?
     private var listener: NWListener?
+    private var incomingConnection: NWConnection?  // Single connection for receiving PC audio
     private let queue = DispatchQueue(label: "network", qos: .userInteractive)
 
     @Published var isConnected = false
@@ -66,6 +67,8 @@ class NetworkManager: ObservableObject {
     func disconnect() {
         connection?.cancel()
         connection = nil
+        incomingConnection?.cancel()
+        incomingConnection = nil
         listener?.cancel()
         listener = nil
 
@@ -123,11 +126,27 @@ class NetworkManager: ObservableObject {
     }
 
     private func handleIncomingConnection(_ connection: NWConnection) {
+        // Only accept one incoming connection - ignore subsequent ones
+        if incomingConnection != nil {
+            connection.cancel()
+            return
+        }
+
         print("🔗 Incoming connection from: \(connection.endpoint)")
-        connection.stateUpdateHandler = { state in
+        incomingConnection = connection
+
+        connection.stateUpdateHandler = { [weak self] state in
             print("   Connection state: \(state)")
-            if case .ready = state {
-                self.receiveLoop(connection)
+            switch state {
+            case .ready:
+                self?.receiveLoop(connection)
+            case .failed, .cancelled:
+                // Allow accepting a new connection if this one dies
+                if self?.incomingConnection === connection {
+                    self?.incomingConnection = nil
+                }
+            default:
+                break
             }
         }
         connection.start(queue: queue)

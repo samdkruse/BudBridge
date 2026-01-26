@@ -28,8 +28,21 @@ struct ContentView: View {
                     HStack {
                         Text("Mic")
                             .font(.caption)
+                            .frame(width: 50, alignment: .leading)
                         ProgressView(value: Double(audioManager.inputLevel), total: 0.5)
                             .progressViewStyle(.linear)
+                            .tint(.green)
+                    }
+                    .padding(.horizontal)
+
+                    // PC audio level indicator
+                    HStack {
+                        Text("PC Audio")
+                            .font(.caption)
+                            .frame(width: 50, alignment: .leading)
+                        ProgressView(value: Double(audioManager.pcAudioLevel), total: 0.5)
+                            .progressViewStyle(.linear)
+                            .tint(.blue)
                     }
                     .padding(.horizontal)
                 }
@@ -106,15 +119,18 @@ struct ContentView: View {
 
     private func toggleConnection() {
         if networkManager.isConnected {
-            audioManager.stop()
             networkManager.disconnect()
+            audioManager.stop()
         } else {
             savedIP = pcIPAddress
-            networkManager.connect(to: pcIPAddress)
+            print("📱 Starting audio engine...")
+            // Start audio engine FIRST, before network
             do {
                 try audioManager.start()
+                print("📱 Audio engine started, now connecting network...")
+                networkManager.connect(to: pcIPAddress)
             } catch {
-                print("Failed to start audio: \(error)")
+                print("❌ Failed to start audio: \(error)")
             }
         }
     }

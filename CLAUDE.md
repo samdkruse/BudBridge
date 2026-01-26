@@ -9,6 +9,30 @@ BudBridge streams audio from a Windows 11 PC to an iOS device, enabling users to
 - **iOS App** (`AirpodPcAudio/`): SwiftUI app that receives and plays audio
 - **Windows App** (`windows/`): Rust application that captures and streams PC audio
 
+## Audio Format
+
+Both sides use the same wire format for network transmission:
+
+| Parameter | Value |
+|-----------|-------|
+| Sample Rate | 48,000 Hz |
+| Bit Depth | 16-bit signed PCM |
+| Channels | Mono |
+| Byte Order | Little-endian |
+
+### Why 48kHz?
+- Native sample rate for both Windows and iOS (no resampling needed)
+- Bandwidth: ~96 KB/s (negligible for WiFi)
+
+### Windows Side
+- Captures audio at 48kHz (Windows default)
+- Sends directly over UDP without downsampling
+
+### iOS Side
+- Expects 48kHz 16-bit PCM from the network
+- Converts to Float32 for AVAudioPlayerNode playback
+- Matches device's native 48kHz sample rate
+
 ## Development Environment
 
 ### Windows/Rust (developed in WSL Ubuntu)
@@ -57,6 +81,35 @@ cargo build --release --target x86_64-pc-windows-gnu && \
 cp target/x86_64-pc-windows-gnu/release/airpod-pc-audio.exe /mnt/c/Users/samdk/Downloads/
 ```
 
+## Testing
+
+### Adding the Test Target (one-time setup)
+
+1. Open `AirpodPcAudio.xcodeproj` in Xcode
+2. File → New → Target → iOS Unit Testing Bundle
+3. Name it `AirpodPcAudioTests`
+4. Add existing test files from `AirpodPcAudioTests/` folder to the target
+5. Add `AudioConversion.swift` to the main app target
+
+### Running Tests
+
+```bash
+# From Xcode: Cmd+U to run all tests
+# Or: Product → Test
+```
+
+### What's Tested
+
+- **AudioConversion**: PCM↔Float conversion, RMS calculation, clipping behavior
+- **NetworkPackets**: UDP chunking logic, MTU compliance
+- **State Management**: Route change handling, initial states
+
+### What Requires Manual Testing
+
+- Actual audio playback (requires hardware)
+- Bluetooth/AirPods connection
+- Network connectivity between devices
+
 ## Project Structure
 
 ```
@@ -65,7 +118,11 @@ BudBridge/
 │   ├── AirpodPcAudioApp.swift
 │   ├── ContentView.swift
 │   ├── NetworkManager.swift
-│   └── AudioManager.swift
+│   ├── AudioManager.swift
+│   └── AudioConversion.swift  # Testable pure functions
+├── AirpodPcAudioTests/      # Unit tests
+│   ├── AudioConversionTests.swift
+│   └── AudioManagerStateTests.swift
 ├── AirpodPcAudio.xcodeproj/ # Xcode project
 ├── windows/                  # Windows Rust app
 │   ├── .cargo/config.toml   # Cross-compilation config

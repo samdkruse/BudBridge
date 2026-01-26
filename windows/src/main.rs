@@ -17,7 +17,7 @@ const RECEIVE_PORT: u16 = 4810;
 const SEND_PORT: u16 = 4811;
 const DEVICES_FILE: &str = "budbridge_devices.txt";
 const DEFAULT_DEVICE_FILE: &str = "budbridge_default.txt";
-const TARGET_SAMPLE_RATE: u32 = 24000;
+const TARGET_SAMPLE_RATE: u32 = 48000;
 
 #[derive(Clone)]
 struct SavedDevice {

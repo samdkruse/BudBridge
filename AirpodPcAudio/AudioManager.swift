@@ -8,12 +8,13 @@ class AudioManager: ObservableObject {
 
     @Published var isRunning = false
     @Published var inputLevel: Float = 0
+    @Published var pcAudioLevel: Float = 0
 
     // Callback when mic audio is captured (send to network)
     var onAudioCaptured: ((Data) -> Void)?
 
-    // Audio format: 16-bit PCM, 24kHz, mono
-    private let sampleRate: Double = 24000
+    // Audio format: 16-bit PCM, 48kHz, mono
+    private let sampleRate: Double = 48000
     private let channels: AVAudioChannelCount = 1
 
     // Debug stats
@@ -48,7 +49,7 @@ class AudioManager: ObservableObject {
         try session.setCategory(
             .playAndRecord,
             mode: .voiceChat,
-            options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker]
+            options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker]
         )
 
         try session.setPreferredSampleRate(sampleRate)
@@ -65,20 +66,34 @@ class AudioManager: ObservableObject {
     // MARK: - Audio Engine
 
     func start() throws {
-        guard !isRunning else { return }
+        guard !isRunning else {
+            print("⚠️ Audio engine already running")
+            return
+        }
 
+        print("🔧 Configuring audio session...")
         try configureAudioSession()
+        print("✅ Audio session configured")
 
+        print("🔧 Creating audio engine...")
         audioEngine = AVAudioEngine()
-        guard let engine = audioEngine else { return }
+        guard let engine = audioEngine else {
+            print("❌ Failed to create audio engine")
+            return
+        }
 
         inputNode = engine.inputNode
+        print("🔧 Got input node")
 
         // Create persistent player node for playback
         playerNode = AVAudioPlayerNode()
-        guard let player = playerNode, let format = floatFormat else { return }
+        guard let player = playerNode, let format = floatFormat else {
+            print("❌ Failed to create player or format")
+            return
+        }
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
+        print("🔧 Player connected to mixer")
 
         // Tap input for mic capture
         let inputFormat = inputNode!.outputFormat(forBus: 0)
@@ -88,19 +103,19 @@ class AudioManager: ObservableObject {
         inputNode!.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, time in
             self?.processMicInput(buffer: buffer)
         }
+        print("🔧 Mic tap installed")
 
+        print("🔧 Starting engine...")
         try engine.start()
+        print("🔧 Engine started, starting player...")
         player.play()
+        isRunning = true  // Set synchronously so playAudio works immediately
         print("▶️ Player started, isPlaying: \(player.isPlaying)")
-
-        DispatchQueue.main.async {
-            self.isRunning = true
-        }
-
-        print("Audio engine started")
+        print("✅ Audio engine fully started, isRunning = \(isRunning)")
     }
 
     func stop() {
+        isRunning = false  // Set synchronously
         playerNode?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()
@@ -110,8 +125,8 @@ class AudioManager: ObservableObject {
         try? AVAudioSession.sharedInstance().setActive(false)
 
         DispatchQueue.main.async {
-            self.isRunning = false
             self.inputLevel = 0
+            self.pcAudioLevel = 0
         }
 
         print("Audio engine stopped")
@@ -162,9 +177,10 @@ class AudioManager: ObservableObject {
 
         floatBuffer.frameLength = frameCount
 
-        // Count non-zero samples and find max amplitude
+        // Convert to float and calculate RMS level
         var maxAmp: Int16 = 0
         var nonZero = 0
+        var rmsLevel: Float = 0
         data.withUnsafeBytes { ptr in
             if let samples = ptr.bindMemory(to: Int16.self).baseAddress,
                let floatData = floatBuffer.floatChannelData?[0] {
@@ -176,7 +192,13 @@ class AudioManager: ObservableObject {
                         if abs(sample) > abs(maxAmp) { maxAmp = sample }
                     }
                 }
+                // Calculate RMS for level meter
+                vDSP_rmsqv(floatData, 1, &rmsLevel, vDSP_Length(frameCount))
             }
+        }
+
+        DispatchQueue.main.async {
+            self.pcAudioLevel = rmsLevel
         }
 
         playbackBufferCount += 1
@@ -241,12 +263,20 @@ class AudioManager: ObservableObject {
               let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
 
-        print("Audio route changed: \(reason)")
+        print("Audio route changed: \(reason.rawValue)")
 
-        // Restart engine if needed after route change
-        if isRunning {
-            stop()
-            try? start()
+        // Only restart on meaningful route changes (device connected/disconnected)
+        // Ignore categoryChange (3), override (4), wakeFromSleep (6), etc.
+        switch reason {
+        case .oldDeviceUnavailable, .newDeviceAvailable:
+            print("🔄 Restarting audio engine due to device change")
+            if isRunning {
+                stop()
+                try? start()
+            }
+        default:
+            // Don't restart for other reasons (category change, etc.)
+            break
         }
     }
 }

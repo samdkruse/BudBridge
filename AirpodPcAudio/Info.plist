@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>BudBridge needs microphone access to send your voice to the PC.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_udp._local.</string>
