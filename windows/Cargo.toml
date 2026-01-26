@@ -9,3 +9,4 @@ anyhow = "1.0"
 crossbeam-channel = "0.5"
 eframe = "0.29"
 parking_lot = "0.12"  # Faster, simpler mutexes
+open = "5"  # Open files/folders with default app
