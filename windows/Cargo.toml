@@ -7,7 +7,5 @@ edition = "2021"
 cpal = "0.15"
 anyhow = "1.0"
 crossbeam-channel = "0.5"
-ctrlc = "3.4"
-
-[target.'cfg(windows)'.dependencies]
-# Windows-specific if needed later
+eframe = "0.29"
+parking_lot = "0.12"  # Faster, simpler mutexes
