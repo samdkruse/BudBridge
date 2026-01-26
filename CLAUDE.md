@@ -35,8 +35,10 @@ Open `AirpodPcAudio.xcodeproj` in Xcode on macOS. Build and run on device or sim
 ## Key Dependencies
 
 ### Windows (Rust)
+- `eframe` - Cross-platform GUI framework (egui)
 - `cpal` - Cross-platform audio I/O
 - `crossbeam-channel` - Multi-producer multi-consumer channels
+- `parking_lot` - Fast synchronization primitives
 - `anyhow` - Error handling
 
 ### iOS (Swift)
