@@ -46,9 +46,11 @@ Both sides use the same wire format for network transmission:
 - Latency optimizations: 4-packet channel buffers, 50ms max output buffer, VecDeque for O(1) operations
 
 ### iOS Side
-- Expects 48kHz 16-bit PCM from the network
-- Converts to Float32 for AVAudioPlayerNode playback
-- Uses jitter buffer (100ms max) with 20ms playback chunks for smooth audio
+- **Receiving (PC audio)**: Expects 48kHz 16-bit PCM, converts to Float32 for AVAudioPlayerNode
+- **Sending (mic)**: Captures at device rate (often 24kHz with Bluetooth HFP), resamples to 48kHz
+- Uses vDSP (hardware accelerated) for resampling and audio conversion
+- Jitter buffer (100ms max) with 20ms chunks for smooth playback
+- Send buffer with 20ms timer for smooth transmission (prevents bursty packets)
 - 5ms IO buffer duration for low latency
 
 ## Setup
@@ -99,9 +101,9 @@ Open `AirpodPcAudio.xcodeproj` in Xcode on macOS. Build and run on device or sim
 - `anyhow` - Error handling
 
 ### iOS (Swift)
-- SwiftUI for UI
+- SwiftUI for UI (tabbed interface with PC management)
 - AVFoundation for audio playback and mic capture
-- Accelerate (vDSP) for audio level metering
+- Accelerate (vDSP) for resampling, level metering, and PCM conversion
 - Network framework for UDP connectivity
 
 ## Agent Commands
@@ -152,9 +154,12 @@ Note: `cp -rn` won't overwrite existing config files, preserving user settings.
 BudBridge/
 ├── AirpodPcAudio/           # iOS app source
 │   ├── AirpodPcAudioApp.swift
-│   ├── ContentView.swift
+│   ├── ContentView.swift    # Tabbed UI (Connect + PCs tabs)
+│   ├── PCsView.swift        # PC management UI
+│   ├── PCStore.swift        # Saved PCs model and persistence
 │   ├── NetworkManager.swift
-│   ├── AudioManager.swift
+│   ├── NetworkUtils.swift   # iPhone IP address detection
+│   ├── AudioManager.swift   # Audio capture, playback, resampling
 │   └── AudioConversion.swift  # Testable pure functions
 ├── AirpodPcAudioTests/      # Unit tests
 │   ├── AudioConversionTests.swift

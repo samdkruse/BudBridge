@@ -14,8 +14,9 @@ class AudioManager: ObservableObject {
     var onAudioCaptured: ((Data) -> Void)?
 
     // Audio format: 16-bit PCM, 48kHz, mono
-    private let sampleRate: Double = 48000
+    private let targetSampleRate: Double = 48000
     private let channels: AVAudioChannelCount = 1
+    private var inputSampleRate: Double = 48000  // Actual mic sample rate (may differ due to HFP)
 
     // Debug stats
     private var playbackBufferCount = 0
@@ -24,19 +25,25 @@ class AudioManager: ObservableObject {
     private var captureSampleCount = 0
     private var lastAudioStatsTime = Date()
 
-    // Low-latency jitter buffer
+    // Low-latency jitter buffer (for receiving PC audio)
     private var jitterBuffer: [Float] = []
     private let jitterBufferLock = NSLock()
     private let maxBufferSamples: Int = 4800  // 100ms at 48kHz
     private let playbackChunkSize: Int = 960  // 20ms chunks
     private var playbackTimer: Timer?
 
+    // Send buffer (for smoothing mic audio transmission)
+    private var sendBuffer: [Int16] = []
+    private let sendBufferLock = NSLock()
+    private let sendChunkSize: Int = 960  // 20ms chunks at 48kHz
+    private var sendTimer: Timer?
+
     private var floatFormat: AVAudioFormat? {
-        AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: channels, interleaved: false)
+        AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: targetSampleRate, channels: channels, interleaved: false)
     }
 
     private var pcmFormat: AVAudioFormat? {
-        AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: sampleRate, channels: channels, interleaved: true)
+        AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: targetSampleRate, channels: channels, interleaved: true)
     }
 
     init() {
@@ -59,7 +66,7 @@ class AudioManager: ObservableObject {
             options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker]
         )
 
-        try session.setPreferredSampleRate(sampleRate)
+        try session.setPreferredSampleRate(targetSampleRate)
         try session.setPreferredIOBufferDuration(0.005) // 5ms buffer for low latency
         try session.setActive(true)
 
@@ -104,8 +111,9 @@ class AudioManager: ObservableObject {
 
         // Tap input for mic capture
         let inputFormat = inputNode!.outputFormat(forBus: 0)
-        print("🎤 Input format: \(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) ch, \(inputFormat.commonFormat.rawValue)")
-        print("🔊 Output format: \(format.sampleRate) Hz, \(format.channelCount) ch")
+        inputSampleRate = inputFormat.sampleRate
+        print("🎤 Input format: \(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) ch")
+        print("🔊 Target format: \(targetSampleRate) Hz (will resample if needed)")
 
         inputNode!.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, time in
             self?.processMicInput(buffer: buffer)
@@ -119,8 +127,9 @@ class AudioManager: ObservableObject {
         isRunning = true  // Set synchronously so playAudio works immediately
         print("▶️ Player started, isPlaying: \(player.isPlaying)")
 
-        // Start timer to drain jitter buffer at regular intervals
+        // Start timers for smooth audio I/O
         startPlaybackTimer()
+        startSendTimer()
         print("✅ Audio engine fully started, isRunning = \(isRunning)")
     }
 
@@ -128,16 +137,22 @@ class AudioManager: ObservableObject {
         isRunning = false  // Set synchronously
         playbackTimer?.invalidate()
         playbackTimer = nil
+        sendTimer?.invalidate()
+        sendTimer = nil
         playerNode?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()
         audioEngine = nil
         playerNode = nil
 
-        // Clear jitter buffer
+        // Clear buffers
         jitterBufferLock.lock()
         jitterBuffer.removeAll()
         jitterBufferLock.unlock()
+
+        sendBufferLock.lock()
+        sendBuffer.removeAll()
+        sendBufferLock.unlock()
 
         try? AVAudioSession.sharedInstance().setActive(false)
 
@@ -162,18 +177,70 @@ class AudioManager: ObservableObject {
             self.inputLevel = rms
         }
 
-        // Convert float to 16-bit PCM
-        var pcmData = Data(capacity: frameCount * 2)
-        for i in 0..<frameCount {
-            let sample = max(-1, min(1, floatData[i]))
-            var intSample = Int16(sample * 32767)
-            pcmData.append(Data(bytes: &intSample, count: 2))
+        // Resample if needed (e.g., 24kHz HFP mic -> 48kHz target)
+        let needsResampling = inputSampleRate != targetSampleRate && inputSampleRate > 0
+        let outputCount: Int
+        var resampledBuffer: [Float]?
+
+        if needsResampling {
+            let ratio = targetSampleRate / inputSampleRate
+            outputCount = Int(Double(frameCount) * ratio)
+            resampledBuffer = resample(floatData, inputCount: frameCount, outputCount: outputCount)
+        } else {
+            outputCount = frameCount
         }
 
-        captureBufferCount += 1
-        captureSampleCount += frameCount
+        // Scale and convert to Int16 using vDSP
+        var scaledSamples = [Float](repeating: 0, count: outputCount)
+        var scale: Float = 32767.0
 
-        onAudioCaptured?(pcmData)
+        if let resampled = resampledBuffer {
+            vDSP_vsmul(resampled, 1, &scale, &scaledSamples, 1, vDSP_Length(outputCount))
+        } else {
+            vDSP_vsmul(floatData, 1, &scale, &scaledSamples, 1, vDSP_Length(outputCount))
+        }
+
+        // Clip and convert to Int16
+        var minVal: Float = -32768.0
+        var maxVal: Float = 32767.0
+        vDSP_vclip(scaledSamples, 1, &minVal, &maxVal, &scaledSamples, 1, vDSP_Length(outputCount))
+
+        var int16Samples = [Int16](repeating: 0, count: outputCount)
+        vDSP_vfix16(scaledSamples, 1, &int16Samples, 1, vDSP_Length(outputCount))
+
+        // Add to send buffer (will be drained by timer for smooth transmission)
+        sendBufferLock.lock()
+        sendBuffer.append(contentsOf: int16Samples)
+
+        // Cap buffer size to prevent buildup (drop oldest if too large)
+        let maxSendBuffer = 9600  // 200ms at 48kHz
+        if sendBuffer.count > maxSendBuffer {
+            sendBuffer.removeFirst(sendBuffer.count - maxSendBuffer)
+        }
+        sendBufferLock.unlock()
+
+        captureBufferCount += 1
+        captureSampleCount += outputCount
+    }
+
+    /// Linear interpolation resampling using vDSP (hardware accelerated)
+    private func resample(_ input: UnsafePointer<Float>, inputCount: Int, outputCount: Int) -> [Float] {
+        guard inputCount > 1, outputCount > 0 else {
+            return Array(UnsafeBufferPointer(start: input, count: inputCount))
+        }
+
+        var output = [Float](repeating: 0, count: outputCount)
+
+        // Generate interpolation indices
+        var indices = [Float](repeating: 0, count: outputCount)
+        var start: Float = 0
+        var step = Float(inputCount - 1) / Float(outputCount - 1)
+        vDSP_vramp(&start, &step, &indices, 1, vDSP_Length(outputCount))
+
+        // Perform linear interpolation using vDSP
+        vDSP_vlint(input, &indices, 1, &output, 1, vDSP_Length(outputCount), vDSP_Length(inputCount))
+
+        return output
     }
 
     // MARK: - Playback (from network)
@@ -220,7 +287,7 @@ class AudioManager: ObservableObject {
         // Log stats every second
         let now = Date()
         if now.timeIntervalSince(lastAudioStatsTime) >= 1.0 {
-            let bufferMs = Int(Double(jitterBuffer.count) / sampleRate * 1000)
+            let bufferMs = Int(Double(jitterBuffer.count) / targetSampleRate * 1000)
             print("🔊 Jitter buffer: \(jitterBuffer.count) samples (\(bufferMs)ms) | Received: \(playbackBufferCount) pkts, \(playbackSampleCount) samples")
             playbackBufferCount = 0
             playbackSampleCount = 0
@@ -267,6 +334,39 @@ class AudioManager: ObservableObject {
         }
 
         player.scheduleBuffer(buffer, completionHandler: nil)
+    }
+
+    // MARK: - Timer-based Sending
+
+    private func startSendTimer() {
+        // Send mic audio every 20ms for smooth transmission
+        sendTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
+            self?.drainSendBuffer()
+        }
+    }
+
+    private func drainSendBuffer() {
+        guard isRunning else { return }
+
+        sendBufferLock.lock()
+
+        // Need at least one chunk to send
+        guard sendBuffer.count >= sendChunkSize else {
+            sendBufferLock.unlock()
+            return
+        }
+
+        // Extract one chunk
+        let samples = Array(sendBuffer.prefix(sendChunkSize))
+        sendBuffer.removeFirst(sendChunkSize)
+        sendBufferLock.unlock()
+
+        // Convert to Data and send
+        let pcmData = samples.withUnsafeBufferPointer { ptr in
+            Data(buffer: ptr)
+        }
+
+        onAudioCaptured?(pcmData)
     }
 
     // MARK: - Interruption Handling
