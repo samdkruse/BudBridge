@@ -24,6 +24,13 @@ class AudioManager: ObservableObject {
     private var captureSampleCount = 0
     private var lastAudioStatsTime = Date()
 
+    // Low-latency jitter buffer
+    private var jitterBuffer: [Float] = []
+    private let jitterBufferLock = NSLock()
+    private let maxBufferSamples: Int = 4800  // 100ms at 48kHz
+    private let playbackChunkSize: Int = 960  // 20ms chunks
+    private var playbackTimer: Timer?
+
     private var floatFormat: AVAudioFormat? {
         AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: channels, interleaved: false)
     }
@@ -53,7 +60,7 @@ class AudioManager: ObservableObject {
         )
 
         try session.setPreferredSampleRate(sampleRate)
-        try session.setPreferredIOBufferDuration(0.02) // 20ms buffer
+        try session.setPreferredIOBufferDuration(0.005) // 5ms buffer for low latency
         try session.setActive(true)
 
         print("Audio session configured:")
@@ -111,16 +118,26 @@ class AudioManager: ObservableObject {
         player.play()
         isRunning = true  // Set synchronously so playAudio works immediately
         print("▶️ Player started, isPlaying: \(player.isPlaying)")
+
+        // Start timer to drain jitter buffer at regular intervals
+        startPlaybackTimer()
         print("✅ Audio engine fully started, isRunning = \(isRunning)")
     }
 
     func stop() {
         isRunning = false  // Set synchronously
+        playbackTimer?.invalidate()
+        playbackTimer = nil
         playerNode?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()
         audioEngine = nil
         playerNode = nil
+
+        // Clear jitter buffer
+        jitterBufferLock.lock()
+        jitterBuffer.removeAll()
+        jitterBufferLock.unlock()
 
         try? AVAudioSession.sharedInstance().setActive(false)
 
@@ -162,38 +179,24 @@ class AudioManager: ObservableObject {
     // MARK: - Playback (from network)
 
     func playAudio(data: Data) {
-        guard isRunning,
-              let player = playerNode,
-              let format = floatFormat else {
-            if !isRunning {
-                print("🔇 playAudio called but engine not running")
-            }
+        guard isRunning else {
             return
         }
 
-        let frameCount = AVAudioFrameCount(data.count / 2) // 16-bit = 2 bytes per sample
-        guard frameCount > 0,
-              let floatBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
+        let frameCount = data.count / 2  // 16-bit = 2 bytes per sample
+        guard frameCount > 0 else { return }
 
-        floatBuffer.frameLength = frameCount
-
-        // Convert to float and calculate RMS level
-        var maxAmp: Int16 = 0
-        var nonZero = 0
+        // Convert to float samples
+        var floatSamples = [Float](repeating: 0, count: frameCount)
         var rmsLevel: Float = 0
+
         data.withUnsafeBytes { ptr in
-            if let samples = ptr.bindMemory(to: Int16.self).baseAddress,
-               let floatData = floatBuffer.floatChannelData?[0] {
-                for i in 0..<Int(frameCount) {
-                    let sample = samples[i]
-                    floatData[i] = Float(sample) / 32768.0
-                    if sample != 0 {
-                        nonZero += 1
-                        if abs(sample) > abs(maxAmp) { maxAmp = sample }
-                    }
+            if let samples = ptr.bindMemory(to: Int16.self).baseAddress {
+                for i in 0..<frameCount {
+                    floatSamples[i] = Float(samples[i]) / 32768.0
                 }
                 // Calculate RMS for level meter
-                vDSP_rmsqv(floatData, 1, &rmsLevel, vDSP_Length(frameCount))
+                vDSP_rmsqv(floatSamples, 1, &rmsLevel, vDSP_Length(frameCount))
             }
         }
 
@@ -201,21 +204,69 @@ class AudioManager: ObservableObject {
             self.pcAudioLevel = rmsLevel
         }
 
-        playbackBufferCount += 1
-        playbackSampleCount += Int(frameCount)
+        // Add to jitter buffer (drop oldest if full)
+        jitterBufferLock.lock()
+        jitterBuffer.append(contentsOf: floatSamples)
 
-        // Log playback stats every second
+        // If buffer exceeds max, drop oldest samples to stay at target latency
+        if jitterBuffer.count > maxBufferSamples {
+            let overflow = jitterBuffer.count - maxBufferSamples
+            jitterBuffer.removeFirst(overflow)
+        }
+
+        playbackBufferCount += 1
+        playbackSampleCount += frameCount
+
+        // Log stats every second
         let now = Date()
         if now.timeIntervalSince(lastAudioStatsTime) >= 1.0 {
-            print("🔊 Playback: \(playbackBufferCount) buffers, \(playbackSampleCount) samples | Player playing: \(player.isPlaying)")
-            print("   Last buffer: \(frameCount) samples, \(nonZero) non-zero, maxAmp: \(maxAmp)")
+            let bufferMs = Int(Double(jitterBuffer.count) / sampleRate * 1000)
+            print("🔊 Jitter buffer: \(jitterBuffer.count) samples (\(bufferMs)ms) | Received: \(playbackBufferCount) pkts, \(playbackSampleCount) samples")
             playbackBufferCount = 0
             playbackSampleCount = 0
             lastAudioStatsTime = now
         }
+        jitterBufferLock.unlock()
+    }
 
-        // Schedule buffer on persistent player node
-        player.scheduleBuffer(floatBuffer, completionHandler: nil)
+    // MARK: - Timer-based Playback
+
+    private func startPlaybackTimer() {
+        // Schedule playback every 20ms
+        playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
+            self?.drainJitterBuffer()
+        }
+    }
+
+    private func drainJitterBuffer() {
+        guard isRunning,
+              let player = playerNode,
+              let format = floatFormat else { return }
+
+        jitterBufferLock.lock()
+
+        // Need at least one chunk to play
+        guard jitterBuffer.count >= playbackChunkSize else {
+            jitterBufferLock.unlock()
+            return
+        }
+
+        // Extract one chunk
+        let samples = Array(jitterBuffer.prefix(playbackChunkSize))
+        jitterBuffer.removeFirst(playbackChunkSize)
+        jitterBufferLock.unlock()
+
+        // Create buffer and schedule
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(playbackChunkSize)) else { return }
+        buffer.frameLength = AVAudioFrameCount(playbackChunkSize)
+
+        if let floatData = buffer.floatChannelData?[0] {
+            for i in 0..<playbackChunkSize {
+                floatData[i] = samples[i]
+            }
+        }
+
+        player.scheduleBuffer(buffer, completionHandler: nil)
     }
 
     // MARK: - Interruption Handling
