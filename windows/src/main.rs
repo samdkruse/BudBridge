@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const RECEIVE_PORT: u16 = 4810;
@@ -64,6 +65,7 @@ struct AppState {
 
 struct AudioDeviceInfo {
     name: String,
+    is_output: bool,  // true = output device (for loopback capture)
 }
 
 #[derive(PartialEq, Default, Clone, Copy)]
@@ -142,23 +144,37 @@ impl BudBridgeApp {
     fn enumerate_devices() -> (Vec<AudioDeviceInfo>, Vec<AudioDeviceInfo>) {
         let host = cpal::default_host();
 
-        let input_devices: Vec<AudioDeviceInfo> = host
-            .input_devices()
-            .map(|devices| {
-                devices
-                    .map(|d| AudioDeviceInfo {
-                        name: d.name().unwrap_or_else(|_| "Unknown".to_string()),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Input devices include both actual inputs AND output devices (for loopback capture)
+        let mut input_devices: Vec<AudioDeviceInfo> = Vec::new();
 
+        // Add regular input devices (microphones, Stereo Mix, etc.)
+        if let Ok(devices) = host.input_devices() {
+            for d in devices {
+                input_devices.push(AudioDeviceInfo {
+                    name: d.name().unwrap_or_else(|_| "Unknown".to_string()),
+                    is_output: false,
+                });
+            }
+        }
+
+        // Add output devices as loopback sources (for capturing PC audio)
+        if let Ok(devices) = host.output_devices() {
+            for d in devices {
+                input_devices.push(AudioDeviceInfo {
+                    name: format!("{} (Loopback)", d.name().unwrap_or_else(|_| "Unknown".to_string())),
+                    is_output: true,
+                });
+            }
+        }
+
+        // Output devices for playback
         let output_devices: Vec<AudioDeviceInfo> = host
             .output_devices()
             .map(|devices| {
                 devices
                     .map(|d| AudioDeviceInfo {
                         name: d.name().unwrap_or_else(|_| "Unknown".to_string()),
+                        is_output: true,
                     })
                     .collect()
             })
@@ -208,6 +224,7 @@ impl BudBridgeApp {
         let iphone_ip = self.iphone_ip.clone();
         let selected_input = self.selected_input;
         let selected_output = self.selected_output;
+        let input_is_loopback = self.input_devices.get(selected_input).map(|d| d.is_output).unwrap_or(false);
         let state = self.state.clone();
         let stop_flag = self.stop_flag.clone();
         let debug_flag = self.debug_logging_flag.clone();
@@ -215,8 +232,8 @@ impl BudBridgeApp {
 
         // Log connection start
         log_message(&log_file, &debug_flag, &format!(
-            "Starting connection to {} (input device: {}, output device: {})",
-            iphone_ip, selected_input, selected_output
+            "Starting connection to {} (input device: {}, loopback: {}, output device: {})",
+            iphone_ip, selected_input, input_is_loopback, selected_output
         ));
 
         self._audio_thread = Some(thread::spawn(move || {
@@ -224,6 +241,7 @@ impl BudBridgeApp {
                 iphone_ip,
                 selected_input,
                 selected_output,
+                input_is_loopback,
                 state.clone(),
                 stop_flag,
                 debug_flag.clone(),
@@ -321,7 +339,7 @@ impl BudBridgeApp {
             ui.add_space(5.0);
 
             ui.horizontal(|ui| {
-                ui.label("Input Device:");
+                ui.label("PC Audio → iPhone:");
                 egui::ComboBox::from_id_salt("input_device")
                     .width(200.0)
                     .selected_text(
@@ -336,9 +354,12 @@ impl BudBridgeApp {
                         }
                     });
             });
+            ui.label("   ↳ Select your speakers with (Loopback) to stream PC audio");
+
+            ui.add_space(5.0);
 
             ui.horizontal(|ui| {
-                ui.label("Output Device:");
+                ui.label("iPhone → PC:");
                 egui::ComboBox::from_id_salt("output_device")
                     .width(200.0)
                     .selected_text(
@@ -353,6 +374,7 @@ impl BudBridgeApp {
                         }
                     });
             });
+            ui.label("   ↳ For mic: use virtual cable (e.g., VB-Audio CABLE Input)");
 
             ui.add_space(5.0);
 
@@ -707,6 +729,7 @@ fn run_bridge(
     iphone_ip: String,
     input_idx: usize,
     output_idx: usize,
+    input_is_loopback: bool,
     state: Arc<AppState>,
     stop_flag: Arc<AtomicBool>,
     debug_flag: Arc<AtomicBool>,
@@ -714,45 +737,64 @@ fn run_bridge(
 ) -> Result<()> {
     let host = cpal::default_host();
 
-    let input_device: Device = host
-        .input_devices()?
-        .nth(input_idx)
-        .ok_or_else(|| anyhow!("Input device not found"))?;
+    // Get the capture device - either from input devices or output devices (for loopback)
+    let (capture_device, capture_config) = if input_is_loopback {
+        // For loopback, we need to find the output device
+        // The input_idx for loopback devices is offset by the number of input devices
+        let num_input_devices = host.input_devices()?.count();
+        let output_loopback_idx = input_idx - num_input_devices;
+
+        let device: Device = host
+            .output_devices()?
+            .nth(output_loopback_idx)
+            .ok_or_else(|| anyhow!("Loopback device not found"))?;
+
+        // For loopback capture, use the output config but build an input stream
+        let config: StreamConfig = device.default_output_config()?.into();
+        (device, config)
+    } else {
+        // Regular input device
+        let device: Device = host
+            .input_devices()?
+            .nth(input_idx)
+            .ok_or_else(|| anyhow!("Input device not found"))?;
+        let config: StreamConfig = device.default_input_config()?.into();
+        (device, config)
+    };
 
     let output_device: Device = host
         .output_devices()?
         .nth(output_idx)
         .ok_or_else(|| anyhow!("Output device not found"))?;
 
-    let input_name = input_device.name().unwrap_or_else(|_| "Unknown".to_string());
+    let capture_name = capture_device.name().unwrap_or_else(|_| "Unknown".to_string());
     let output_name = output_device.name().unwrap_or_else(|_| "Unknown".to_string());
 
-    log_message(&log_file, &debug_flag, &format!("Input device: {}", input_name));
+    log_message(&log_file, &debug_flag, &format!("Capture device: {} (loopback: {})", capture_name, input_is_loopback));
     log_message(&log_file, &debug_flag, &format!("Output device: {}", output_name));
 
-    let input_config: StreamConfig = input_device.default_input_config()?.into();
     let output_config: StreamConfig = output_device.default_output_config()?.into();
 
-    let input_channels = input_config.channels;
+    let capture_channels = capture_config.channels;
     let output_channels = output_config.channels;
-    let input_sample_rate = input_config.sample_rate.0;
+    let capture_sample_rate = capture_config.sample_rate.0;
     let output_sample_rate = output_config.sample_rate.0;
 
     log_message(&log_file, &debug_flag, &format!(
-        "Input config: {} Hz, {} channels", input_sample_rate, input_channels
+        "Capture config: {} Hz, {} channels", capture_sample_rate, capture_channels
     ));
     log_message(&log_file, &debug_flag, &format!(
         "Output config: {} Hz, {} channels", output_sample_rate, output_channels
     ));
 
-    let (mic_tx, mic_rx): (Sender<Vec<i16>>, Receiver<Vec<i16>>) = bounded(32);
-    let (pc_tx, pc_rx): (Sender<Vec<i16>>, Receiver<Vec<i16>>) = bounded(32);
+    let (mic_tx, mic_rx): (Sender<Vec<i16>>, Receiver<Vec<i16>>) = bounded(4);
+    let (pc_tx, pc_rx): (Sender<Vec<i16>>, Receiver<Vec<i16>>) = bounded(4);
 
     let iphone_addr = format!("{}:{}", iphone_ip, SEND_PORT);
 
     *state.status_message.lock() = format!(
         "Connected to {} ({}Hz {}ch)",
-        iphone_ip, input_sample_rate, input_channels
+        iphone_ip, capture_sample_rate, capture_channels
     );
 
     let stop_net = stop_flag.clone();
@@ -767,12 +809,12 @@ fn run_bridge(
     let state_audio = state.clone();
     let debug_flag_audio = debug_flag.clone();
     let log_file_audio = log_file.clone();
-    let input_stream = build_input_stream(
-        &input_device,
-        &input_config,
+    let capture_stream = build_input_stream(
+        &capture_device,
+        &capture_config,
         mic_tx,
-        input_channels,
-        input_sample_rate,
+        capture_channels,
+        capture_sample_rate,
         state_audio,
         debug_flag_audio,
         log_file_audio,
@@ -780,7 +822,7 @@ fn run_bridge(
 
     let output_stream = build_output_stream(&output_device, &output_config, pc_rx, output_channels)?;
 
-    input_stream.play()?;
+    capture_stream.play()?;
     output_stream.play()?;
 
     log_message(&log_file, &debug_flag, "Audio streams started");
@@ -791,7 +833,7 @@ fn run_bridge(
 
     log_message(&log_file, &debug_flag, "Stopping audio streams");
 
-    drop(input_stream);
+    drop(capture_stream);
     drop(output_stream);
     net_handle.join().ok();
 
@@ -961,7 +1003,8 @@ fn build_output_stream(
 ) -> Result<cpal::Stream> {
     let err_fn = |err| eprintln!("Output stream error: {}", err);
 
-    let buffer: Arc<std::sync::Mutex<Vec<f32>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    // Use VecDeque for O(1) pop_front instead of Vec's O(n) remove(0)
+    let buffer: Arc<std::sync::Mutex<VecDeque<f32>>> = Arc::new(std::sync::Mutex::new(VecDeque::new()));
     let buffer_clone = buffer.clone();
 
     thread::spawn(move || {
@@ -969,10 +1012,10 @@ fn build_output_stream(
             let floats: Vec<f32> = samples.iter().map(|&s| s as f32 / 32768.0).collect();
             if let Ok(mut buf) = buffer_clone.lock() {
                 buf.extend(floats);
-                let max_samples = 48000 / 5;
-                let current_len = buf.len();
-                if current_len > max_samples {
-                    buf.drain(0..current_len - max_samples);
+                // Keep max ~50ms of audio (2400 samples at 48kHz) to minimize latency
+                let max_samples = 48000 / 20;
+                while buf.len() > max_samples {
+                    buf.pop_front();
                 }
             }
         }
@@ -984,7 +1027,7 @@ fn build_output_stream(
             if let Ok(mut buf) = buffer.lock() {
                 if channels == 2 {
                     for chunk in data.chunks_mut(2) {
-                        let sample = if !buf.is_empty() { buf.remove(0) } else { 0.0 };
+                        let sample = buf.pop_front().unwrap_or(0.0);
                         chunk[0] = sample;
                         if chunk.len() > 1 {
                             chunk[1] = sample;
@@ -992,7 +1035,7 @@ fn build_output_stream(
                     }
                 } else {
                     for sample in data.iter_mut() {
-                        *sample = if !buf.is_empty() { buf.remove(0) } else { 0.0 };
+                        *sample = buf.pop_front().unwrap_or(0.0);
                     }
                 }
             }
