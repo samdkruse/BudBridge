@@ -8,6 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		5A557B812F2807E800AB6BDC /* AudioConversion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A557B802F2807E800AB6BDC /* AudioConversion.swift */; };
+		5A557B852F2842FB00AB6BDC /* NetworkUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A557B822F2842FB00AB6BDC /* NetworkUtils.swift */; };
+		5A557B862F2842FB00AB6BDC /* PCStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A557B832F2842FB00AB6BDC /* PCStore.swift */; };
+		5A557B872F2842FB00AB6BDC /* PCsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A557B842F2842FB00AB6BDC /* PCsView.swift */; };
 		A1000001238F1234567890AB /* AirpodPcAudioApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002238F1234567890AB /* AirpodPcAudioApp.swift */; };
 		A1000003238F1234567890AB /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000004238F1234567890AB /* ContentView.swift */; };
 		A1000005238F1234567890AB /* AudioManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000006238F1234567890AB /* AudioManager.swift */; };
@@ -16,6 +19,9 @@
 
 /* Begin PBXFileReference section */
 		5A557B802F2807E800AB6BDC /* AudioConversion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioConversion.swift; sourceTree = "<group>"; };
+		5A557B822F2842FB00AB6BDC /* NetworkUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkUtils.swift; sourceTree = "<group>"; };
+		5A557B832F2842FB00AB6BDC /* PCStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCStore.swift; sourceTree = "<group>"; };
+		5A557B842F2842FB00AB6BDC /* PCsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCsView.swift; sourceTree = "<group>"; };
 		A1000002238F1234567890AB /* AirpodPcAudioApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirpodPcAudioApp.swift; sourceTree = "<group>"; };
 		A1000004238F1234567890AB /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A1000006238F1234567890AB /* AudioManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioManager.swift; sourceTree = "<group>"; };
@@ -46,6 +52,9 @@
 		A100000D238F1234567890AB /* AirpodPcAudio */ = {
 			isa = PBXGroup;
 			children = (
+				5A557B822F2842FB00AB6BDC /* NetworkUtils.swift */,
+				5A557B832F2842FB00AB6BDC /* PCStore.swift */,
+				5A557B842F2842FB00AB6BDC /* PCsView.swift */,
 				5A557B802F2807E800AB6BDC /* AudioConversion.swift */,
 				A1000002238F1234567890AB /* AirpodPcAudioApp.swift */,
 				A1000004238F1234567890AB /* ContentView.swift */,
@@ -135,6 +144,9 @@
 				A1000001238F1234567890AB /* AirpodPcAudioApp.swift in Sources */,
 				A1000003238F1234567890AB /* ContentView.swift in Sources */,
 				A1000005238F1234567890AB /* AudioManager.swift in Sources */,
+				5A557B852F2842FB00AB6BDC /* NetworkUtils.swift in Sources */,
+				5A557B862F2842FB00AB6BDC /* PCStore.swift in Sources */,
+				5A557B872F2842FB00AB6BDC /* PCsView.swift in Sources */,
 				5A557B812F2807E800AB6BDC /* AudioConversion.swift in Sources */,
 				A1000007238F1234567890AB /* NetworkManager.swift in Sources */,
 			);

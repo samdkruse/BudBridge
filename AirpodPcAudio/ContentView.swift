@@ -3,13 +3,48 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var audioManager = AudioManager()
     @StateObject private var networkManager = NetworkManager()
+    @StateObject private var pcStore = PCStore()
 
-    @State private var pcIPAddress = ""
-    @AppStorage("lastPCIP") private var savedIP = ""
+    var body: some View {
+        TabView {
+            ConnectionView(
+                audioManager: audioManager,
+                networkManager: networkManager,
+                pcStore: pcStore
+            )
+            .tabItem {
+                Label("Connect", systemImage: "antenna.radiowaves.left.and.right")
+            }
+
+            PCsView(pcStore: pcStore)
+                .tabItem {
+                    Label("PCs", systemImage: "desktopcomputer")
+                }
+        }
+        .onAppear(perform: setupBindings)
+    }
+
+    private func setupBindings() {
+        // Wire up audio -> network
+        audioManager.onAudioCaptured = { data in
+            networkManager.sendAudio(data)
+        }
+
+        // Wire up network -> audio
+        networkManager.onAudioReceived = { data in
+            audioManager.playAudio(data: data)
+        }
+    }
+}
+
+struct ConnectionView: View {
+    @ObservedObject var audioManager: AudioManager
+    @ObservedObject var networkManager: NetworkManager
+    @ObservedObject var pcStore: PCStore
 
     var body: some View {
         VStack(spacing: 24) {
-            Text("AirPod PC Audio")
+            Text("BudBridge")
                 .font(.largeTitle)
                 .fontWeight(.bold)
 
@@ -28,7 +63,7 @@ struct ContentView: View {
                     HStack {
                         Text("Mic")
                             .font(.caption)
-                            .frame(width: 50, alignment: .leading)
+                            .frame(width: 60, alignment: .leading)
                         ProgressView(value: Double(audioManager.inputLevel), total: 0.5)
                             .progressViewStyle(.linear)
                             .tint(.green)
@@ -39,7 +74,7 @@ struct ContentView: View {
                     HStack {
                         Text("PC Audio")
                             .font(.caption)
-                            .frame(width: 50, alignment: .leading)
+                            .frame(width: 60, alignment: .leading)
                         ProgressView(value: Double(audioManager.pcAudioLevel), total: 0.5)
                             .progressViewStyle(.linear)
                             .tint(.blue)
@@ -51,21 +86,40 @@ struct ContentView: View {
             .background(Color(.systemGray6))
             .cornerRadius(12)
 
-            // IP Input
+            // PC Selection
             VStack(alignment: .leading, spacing: 8) {
-                Text("PC IP Address")
+                Text("PC")
                     .font(.headline)
 
-                TextField("192.168.1.100", text: $pcIPAddress)
-                    .textFieldStyle(.roundedBorder)
-                    .keyboardType(.decimalPad)
-                    .autocapitalization(.none)
-                    .disableAutocorrection(true)
-                    .onAppear {
-                        if pcIPAddress.isEmpty {
-                            pcIPAddress = savedIP
+                if pcStore.pcs.isEmpty {
+                    Text("No PCs saved. Go to PCs tab to add one.")
+                        .foregroundColor(.secondary)
+                        .font(.subheadline)
+                } else {
+                    Menu {
+                        ForEach(pcStore.pcs) { pc in
+                            Button(action: { pcStore.select(pc) }) {
+                                HStack {
+                                    Text(pc.name)
+                                    if pcStore.selectedPCId == pc.id {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
                         }
+                    } label: {
+                        HStack {
+                            Text(pcStore.selectedPC?.name ?? "Select a PC")
+                                .foregroundColor(pcStore.selectedPC != nil ? .primary : .secondary)
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .foregroundColor(.secondary)
+                        }
+                        .padding()
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
                     }
+                }
             }
             .padding(.horizontal)
 
@@ -83,38 +137,43 @@ struct ContentView: View {
                 .cornerRadius(12)
             }
             .padding(.horizontal)
-            .disabled(pcIPAddress.isEmpty && !networkManager.isConnected)
+            .disabled(pcStore.selectedPC == nil && !networkManager.isConnected)
 
             Spacer()
+
+            // iPhone IP Display
+            HStack {
+                Text("My iPhone IP:")
+                    .foregroundColor(.secondary)
+                if let ip = NetworkUtils.getWiFiIPAddress() {
+                    Text(ip)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundColor(.primary)
+                } else {
+                    Text("No WiFi")
+                        .foregroundColor(.red)
+                }
+            }
+            .font(.subheadline)
+            .padding()
+            .background(Color(.systemGray6))
+            .cornerRadius(8)
 
             // Instructions
             VStack(alignment: .leading, spacing: 4) {
                 Text("Setup:")
                     .font(.caption)
                     .fontWeight(.bold)
-                Text("1. Run the PC app on your Windows machine")
-                Text("2. Enter your PC's IP address above")
-                Text("3. Tap Connect")
-                Text("4. AirPods audio will stream to/from PC")
+                Text("1. Run BudBridge on your Windows PC")
+                Text("2. Add your PC in the PCs tab")
+                Text("3. Select the PC above and tap Connect")
+                Text("4. Audio will stream between devices")
             }
             .font(.caption)
             .foregroundColor(.secondary)
             .padding()
         }
         .padding()
-        .onAppear(perform: setupBindings)
-    }
-
-    private func setupBindings() {
-        // Wire up audio -> network
-        audioManager.onAudioCaptured = { data in
-            networkManager.sendAudio(data)
-        }
-
-        // Wire up network -> audio
-        networkManager.onAudioReceived = { data in
-            audioManager.playAudio(data: data)
-        }
     }
 
     private func toggleConnection() {
@@ -122,13 +181,13 @@ struct ContentView: View {
             networkManager.disconnect()
             audioManager.stop()
         } else {
-            savedIP = pcIPAddress
+            guard let pc = pcStore.selectedPC else { return }
             print("📱 Starting audio engine...")
             // Start audio engine FIRST, before network
             do {
                 try audioManager.start()
-                print("📱 Audio engine started, now connecting network...")
-                networkManager.connect(to: pcIPAddress)
+                print("📱 Audio engine started, now connecting to \(pc.name) (\(pc.ipAddress))...")
+                networkManager.connect(to: pc.ipAddress)
             } catch {
                 print("❌ Failed to start audio: \(error)")
             }
