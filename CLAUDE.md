@@ -2,12 +2,28 @@
 
 ## Project Overview
 
-BudBridge streams audio from a Windows 11 PC to an iOS device, enabling users to listen to PC audio through AirPods connected to their iPhone.
+BudBridge streams audio bidirectionally between a Windows 11 PC and an iOS device, enabling users to use AirPods connected to their iPhone as PC audio I/O. This works around Bluetooth restrictions that prevent direct AirPods-to-PC connections.
 
 ## Architecture
 
-- **iOS App** (`AirpodPcAudio/`): SwiftUI app that receives and plays audio
-- **Windows App** (`windows/`): Rust application that captures and streams PC audio
+- **iOS App** (`AirpodPcAudio/`): SwiftUI app that receives PC audio and captures AirPods mic
+- **Windows App** (`windows/`): Rust GUI application with loopback capture and audio playback
+
+### Audio Flow
+
+```
+PC Audio (YouTube, games, etc.)
+    ↓ WASAPI Loopback Capture
+    ↓ UDP over WiFi
+    ↓ iPhone receives
+    ↓ AirPods speakers ✓
+
+AirPods mic
+    ↓ iPhone captures
+    ↓ UDP over WiFi
+    ↓ PC receives
+    ↓ Virtual audio cable (optional) → Discord/Zoom
+```
 
 ## Audio Format
 
@@ -25,13 +41,30 @@ Both sides use the same wire format for network transmission:
 - Bandwidth: ~96 KB/s (negligible for WiFi)
 
 ### Windows Side
-- Captures audio at 48kHz (Windows default)
-- Sends directly over UDP without downsampling
+- **PC → iPhone**: Uses WASAPI loopback to capture system audio from any output device
+- **iPhone → PC**: Plays received audio to selected output device (use virtual cable for mic)
+- Latency optimizations: 4-packet channel buffers, 50ms max output buffer, VecDeque for O(1) operations
 
 ### iOS Side
 - Expects 48kHz 16-bit PCM from the network
 - Converts to Float32 for AVAudioPlayerNode playback
-- Matches device's native 48kHz sample rate
+- Uses jitter buffer (100ms max) with 20ms playback chunks for smooth audio
+- 5ms IO buffer duration for low latency
+
+## Setup
+
+### PC Audio → iPhone (no extra software needed)
+1. Select your speakers with "(Loopback)" in the "PC Audio → iPhone" dropdown
+2. Connect to your iPhone
+3. Done - PC audio plays through AirPods
+
+### iPhone Mic → PC Apps (requires virtual audio cable)
+To use AirPods mic in Discord/Zoom, you need a virtual audio device:
+1. Install [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) (free)
+2. In BudBridge, set "iPhone → PC" to "CABLE Input"
+3. In Discord/Zoom, set microphone to "CABLE Output"
+
+**Why?** Windows doesn't provide an API to create virtual audio devices. This requires a kernel-mode driver, which VB-Audio provides.
 
 ## Development Environment
 
@@ -67,8 +100,9 @@ Open `AirpodPcAudio.xcodeproj` in Xcode on macOS. Build and run on device or sim
 
 ### iOS (Swift)
 - SwiftUI for UI
-- AVFoundation for audio playback
-- Network framework for connectivity
+- AVFoundation for audio playback and mic capture
+- Accelerate (vDSP) for audio level metering
+- Network framework for UDP connectivity
 
 ## Agent Commands
 
