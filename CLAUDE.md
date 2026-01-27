@@ -107,13 +107,15 @@ Open `AirpodPcAudio.xcodeproj` in Xcode on macOS. Build and run on device or sim
 ## Agent Commands
 
 ### "windows deploy"
-Build and copy the Windows exe to the Downloads folder for easy access:
+Build and copy the Windows exe and config folder to the Downloads folder:
 ```bash
 cd /home/samdk/code/BudBridge/windows && \
 . "$HOME/.cargo/env" && \
 cargo build --release --target x86_64-pc-windows-gnu && \
-cp target/x86_64-pc-windows-gnu/release/airpod-pc-audio.exe /mnt/c/Users/samdk/Downloads/
+cp target/x86_64-pc-windows-gnu/release/airpod-pc-audio.exe /mnt/c/Users/samdk/Downloads/ && \
+cp -rn budbridgeconfig /mnt/c/Users/samdk/Downloads/
 ```
+Note: `cp -rn` won't overwrite existing config files, preserving user settings.
 
 ## Testing
 
@@ -161,6 +163,11 @@ BudBridge/
 ├── windows/                  # Windows Rust app
 │   ├── .cargo/config.toml   # Cross-compilation config
 │   ├── Cargo.toml
-│   └── src/main.rs
+│   ├── src/main.rs
+│   └── budbridgeconfig/     # Config template (copied on deploy)
+│       ├── devices.txt      # Saved devices (name|ip per line)
+│       ├── default.txt      # Default device name
+│       ├── settings.txt     # App settings (debug=true/false)
+│       └── logs/            # Debug logs (when enabled)
 └── airpod-pc-audio.exe      # Pre-built Windows binary
 ```
