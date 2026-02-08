@@ -38,6 +38,11 @@ class AudioManager: ObservableObject {
     private let sendChunkSize: Int = 960  // 20ms chunks at 48kHz
     private var sendTimer: Timer?
 
+    // Track in-flight buffers to prevent unbounded queue growth
+    private var scheduledBufferCount = 0
+    private let scheduledBufferLock = NSLock()
+    private let maxScheduledBuffers = 5  // Cap queued buffers in player node
+
     private var floatFormat: AVAudioFormat? {
         AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: targetSampleRate, channels: channels, interleaved: false)
     }
@@ -154,6 +159,11 @@ class AudioManager: ObservableObject {
         sendBuffer.removeAll()
         sendBufferLock.unlock()
 
+        // Reset scheduled buffer count
+        scheduledBufferLock.lock()
+        scheduledBufferCount = 0
+        scheduledBufferLock.unlock()
+
         try? AVAudioSession.sharedInstance().setActive(false)
 
         DispatchQueue.main.async {
@@ -253,27 +263,30 @@ class AudioManager: ObservableObject {
         let frameCount = data.count / 2  // 16-bit = 2 bytes per sample
         guard frameCount > 0 else { return }
 
-        // Convert to float samples
-        var floatSamples = [Float](repeating: 0, count: frameCount)
+        // Convert to float samples directly into jitter buffer
         var rmsLevel: Float = 0
+
+        jitterBufferLock.lock()
+        let insertOffset = jitterBuffer.count
+        jitterBuffer.append(contentsOf: repeatElement(Float(0), count: frameCount))
 
         data.withUnsafeBytes { ptr in
             if let samples = ptr.bindMemory(to: Int16.self).baseAddress {
                 for i in 0..<frameCount {
-                    floatSamples[i] = Float(samples[i]) / 32768.0
+                    jitterBuffer[insertOffset + i] = Float(samples[i]) / 32768.0
                 }
-                // Calculate RMS for level meter
-                vDSP_rmsqv(floatSamples, 1, &rmsLevel, vDSP_Length(frameCount))
+                // Calculate RMS for level meter using the samples we just wrote
+                jitterBuffer.withUnsafeBufferPointer { bufPtr in
+                    if let base = bufPtr.baseAddress {
+                        vDSP_rmsqv(base + insertOffset, 1, &rmsLevel, vDSP_Length(frameCount))
+                    }
+                }
             }
         }
 
         DispatchQueue.main.async {
             self.pcAudioLevel = rmsLevel
         }
-
-        // Add to jitter buffer (drop oldest if full)
-        jitterBufferLock.lock()
-        jitterBuffer.append(contentsOf: floatSamples)
 
         // If buffer exceeds max, drop oldest samples to stay at target latency
         if jitterBuffer.count > maxBufferSamples {
@@ -310,6 +323,12 @@ class AudioManager: ObservableObject {
               let player = playerNode,
               let format = floatFormat else { return }
 
+        // Don't queue more buffers if player already has enough
+        scheduledBufferLock.lock()
+        let currentCount = scheduledBufferCount
+        scheduledBufferLock.unlock()
+        guard currentCount < maxScheduledBuffers else { return }
+
         jitterBufferLock.lock()
 
         // Need at least one chunk to play
@@ -333,7 +352,15 @@ class AudioManager: ObservableObject {
             }
         }
 
-        player.scheduleBuffer(buffer, completionHandler: nil)
+        scheduledBufferLock.lock()
+        scheduledBufferCount += 1
+        scheduledBufferLock.unlock()
+
+        player.scheduleBuffer(buffer) { [weak self] in
+            self?.scheduledBufferLock.lock()
+            self?.scheduledBufferCount -= 1
+            self?.scheduledBufferLock.unlock()
+        }
     }
 
     // MARK: - Timer-based Sending

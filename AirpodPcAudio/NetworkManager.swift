@@ -72,9 +72,9 @@ class NetworkManager: ObservableObject {
         listener?.cancel()
         listener = nil
 
-        DispatchQueue.main.async {
-            self.isConnected = false
-            self.statusMessage = "Disconnected"
+        DispatchQueue.main.async { [weak self] in
+            self?.isConnected = false
+            self?.statusMessage = "Disconnected"
         }
     }
 

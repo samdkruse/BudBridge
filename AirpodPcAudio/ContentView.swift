@@ -25,14 +25,14 @@ struct ContentView: View {
     }
 
     private func setupBindings() {
-        // Wire up audio -> network
-        audioManager.onAudioCaptured = { data in
-            networkManager.sendAudio(data)
+        // Wire up audio -> network (weak to break retain cycle)
+        audioManager.onAudioCaptured = { [weak networkManager] data in
+            networkManager?.sendAudio(data)
         }
 
-        // Wire up network -> audio
-        networkManager.onAudioReceived = { data in
-            audioManager.playAudio(data: data)
+        // Wire up network -> audio (weak to break retain cycle)
+        networkManager.onAudioReceived = { [weak audioManager] data in
+            audioManager?.playAudio(data: data)
         }
     }
 }
